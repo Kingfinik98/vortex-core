@@ -104,6 +104,13 @@ public class MainActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
+    // === KEYBOX TOOL COMPONENTS ===
+    private Button btnKeyboxMode1, btnKeyboxMode2, btnCheckIntegrity;
+    private TextView tvKeyboxLog, tvKeyboxStatus;
+    private Handler keyboxHandler = new Handler(Looper.getMainLooper());
+    private Process keyboxProcess = null;
+    private boolean isKeyboxRunning = false;
+
         prefs = getSharedPreferences("VortexPrefs", 0);
         
         pickImageLauncher = registerForActivityResult(
@@ -221,6 +228,18 @@ public class MainActivity extends AppCompatActivity {
         inputCode = findViewById(R.id.input_code);
 
         if(tvTerminalLog != null) tvTerminalLog.setMovementMethod(new ScrollingMovementMethod());
+        
+        // Keybox Tool Components
+        btnKeyboxMode1 = findViewById(R.id.btn_keybox_mode1);
+        btnKeyboxMode2 = findViewById(R.id.btn_keybox_mode2);
+        btnCheckIntegrity = findViewById(R.id.btn_check_integrity);
+        tvKeyboxLog = findViewById(R.id.tv_keybox_log);
+        tvKeyboxStatus = findViewById(R.id.tv_keybox_status);
+        
+        if(tvKeyboxLog != null) {
+            tvKeyboxLog.setMovementMethod(new ScrollingMovementMethod());
+            tvKeyboxLog.setText("VorteX Keybox Tool Ready...\n");
+        }
 
         if(tvRam != null) {
             tvRam.setMaxLines(1);
@@ -282,6 +301,27 @@ public class MainActivity extends AppCompatActivity {
         findViewById(R.id.btn_saturation).setOnClickListener(v -> showSaturationMenu()); 
         findViewById(R.id.btn_renderer).setOnClickListener(v -> showRendererMenu());
         findViewById(R.id.btn_vsync).setOnClickListener(v -> toggleCpuVsync());
+        
+        // Keybox Tool Listeners
+        if(btnKeyboxMode1 != null) {
+            btnKeyboxMode1.setOnClickListener(v -> {
+                if(!isKeyboxRunning) showKeyboxConfirmDialog("1", "Direct Source");
+                else Toast.makeText(this, "Running...", Toast.LENGTH_SHORT).show();
+            });
+        }
+        
+        if(btnKeyboxMode2 != null) {
+            btnKeyboxMode2.setOnClickListener(v -> {
+                if(!isKeyboxRunning) showKeyboxConfirmDialog("2", "Advanced Engine");
+                else Toast.makeText(this, "Running...", Toast.LENGTH_SHORT).show();
+            });
+        }
+        
+        if(btnCheckIntegrity != null) {
+            btnCheckIntegrity.setOnClickListener(v -> {
+                if(!isKeyboxRunning) executeKeyboxScript("3");
+            });
+        }
 
         navSystem.setOnClickListener(v -> { 
             viewFlipper.setDisplayedChild(0); 
@@ -1311,5 +1351,152 @@ public class MainActivity extends AppCompatActivity {
             });
             try { Thread.sleep(5000); } catch (Exception e){}
         }).start();
+    }
+
+    // ============================================
+    // KEYBOX TOOL - CONFIRMATION DIALOG
+    // ============================================
+    private void showKeyboxConfirmDialog(String mode, String modeName) {
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("VorteX Keybox Tool");
+        builder.setMessage("Execute " + modeName + "?\n\nDownload/generate keybox\nInject to Tricky Store\nRequire ROOT access");
+        builder.setPositiveButton("EXECUTE", (dialog, which) -> executeKeyboxScript(mode));
+        builder.setNegativeButton("Cancel", null);
+        builder.show();
+    }
+
+    // ============================================
+    // KEYBOX TOOL - MAIN EXECUTION
+    // ============================================
+    private void executeKeyboxScript(String mode) {
+        isKeyboxRunning = true;
+        tvKeyboxStatus.setText("Running...");
+        tvKeyboxStatus.setTextColor(Color.parseColor("#FF9800"));
+        tvKeyboxLog.setText("");
+        
+        appendKeyboxLog("============================================");
+        appendKeyboxLog(" VORTEX KEYBOX TOOL - @VorteXSU_Dev");
+        appendKeyboxLog(" Mode: " + mode + " | Starting...");
+        appendKeyboxLog("============================================\n");
+        
+        btnKeyboxMode1.setEnabled(false);
+        btnKeyboxMode2.setEnabled(false);
+        btnCheckIntegrity.setEnabled(false);
+        
+        new Thread(() -> {
+            try {
+                String scriptPath = copyKeyboxScriptToTemp();
+                if(scriptPath == null) {
+                    appendKeyboxLog("ERROR: Failed to extract script!");
+                    resetKeyboxUI();
+                    return;
+                }
+                
+                appendKeyboxLog("Script ready: " + scriptPath);
+                Runtime.getRuntime().exec("chmod 755 " + scriptPath);
+                
+                String[] command;
+                if(mode.equals("3")) {
+                    command = new String[]{"sh", scriptPath, "3"};
+                } else {
+                    command = new String[]{"sh", "-c", "echo '" + mode + "' | sh " + scriptPath};
+                }
+                
+                appendKeyboxLog("Executing mode " + mode + "...\n");
+                
+                ProcessBuilder pb = new ProcessBuilder(command);
+                pb.redirectErrorStream(true);
+                pb.environment().put("HOME", "/sdcard");
+                pb.environment().put("TERM", "xterm");
+                
+                keyboxProcess = pb.start();
+                BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(keyboxProcess.getInputStream())
+                );
+                
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    final String logLine = line;
+                    keyboxHandler.post(() -> {
+                        appendKeyboxLog(logLine);
+                        ScrollView sv = (ScrollView) tvKeyboxLog.getParent();
+                        if(sv != null) sv.fullScroll(View.FOCUS_DOWN);
+                    });
+                }
+                
+                int exitCode = keyboxProcess.waitFor();
+                final int finalExitCode = exitCode;
+                
+                keyboxHandler.post(() -> {
+                    appendKeyboxLog("--------------------------------------------");
+                    if(finalExitCode == 0) {
+                        appendKeyboxLog("SUCCESS!");
+                        tvKeyboxStatus.setText("Success");
+                        tvKeyboxStatus.setTextColor(Color.parseColor("#4CAF50"));
+                    } else {
+                        appendKeyboxLog("FAILED (code: " + finalExitCode + ")");
+                        tvKeyboxStatus.setText("Failed");
+                        tvKeyboxStatus.setTextColor(Color.parseColor("#F44336"));
+                    }
+                    appendKeyboxLog("============================================");
+                    resetKeyboxUI();
+                });
+                
+            } catch (Exception e) {
+                e.printStackTrace();
+                keyboxHandler.post(() -> {
+                    appendKeyboxLog("ERROR: " + e.getMessage());
+                    tvKeyboxStatus.setText("Error");
+                    tvKeyboxStatus.setTextColor(Color.parseColor("#F44336"));
+                    resetKeyboxUI();
+                });
+            }
+        }).start();
+    }
+
+    // ============================================
+    // KEYBOX TOOL - COPY FROM ASSETS
+    // ============================================
+    private String copyKeyboxScriptToTemp() {
+        try {
+            AssetManager am = getAssets();
+            InputStream is = am.open("generate_keybox.sh");
+            File tempDir = new File("/data/local/tmp");
+            if(!tempDir.exists()) tempDir = new File("/sdcard");
+            
+            File scriptFile = new File(tempDir, "vortex_keybox_tool.sh");
+            FileOutputStream fos = new FileOutputStream(scriptFile);
+            byte[] buffer = new byte[1024];
+            int read;
+            while ((read = is.read(buffer)) != -1) {
+                fos.write(buffer, 0, read);
+            }
+            is.close();
+            fos.close();
+            return scriptFile.getAbsolutePath();
+        } catch (IOException e) {
+            Log.e("KeyboxTool", "Copy failed", e);
+            return null;
+        }
+    }
+
+    // ============================================
+    // KEYBOX TOOL - APPEND LOG
+    // ============================================
+    private void appendKeyboxLog(String msg) {
+        if(tvKeyboxLog != null) {
+            tvKeyboxLog.setText(tvKeyboxLog.getText().toString() + msg + "\n");
+        }
+    }
+
+    // ============================================
+    // KEYBOX TOOL - RESET UI
+    // ============================================
+    private void resetKeyboxUI() {
+        isKeyboxRunning = false;
+        keyboxProcess = null;
+        if(btnKeyboxMode1 != null) btnKeyboxMode1.setEnabled(true);
+        if(btnKeyboxMode2 != null) btnKeyboxMode2.setEnabled(true);
+        if(btnCheckIntegrity != null) btnCheckIntegrity.setEnabled(true);
     }
 }
